@@ -9,7 +9,7 @@ import '../../utils/AccessControlUpgradeable.sol';
 import '../../utils/RateLib.sol';
 import '../../interfaces/IChainlinkV3Aggregator.sol';
 
-contract ERC20ValueProvider is
+abstract contract ERC20ValueProvider is
     ReentrancyGuardUpgradeable,
     AccessControlUpgradeable
 {
@@ -33,12 +33,12 @@ contract ERC20ValueProvider is
     /// @param _token The token address
     /// @param _baseCreditLimitRate The base credit limit rate
     /// @param _baseLiquidationLimitRate The base liquidation limit rate
-    function initialize(
+    function __initialize(
         IChainlinkV3Aggregator _aggregator,
         IERC20MetadataUpgradeable _token,
         RateLib.Rate calldata _baseCreditLimitRate,
         RateLib.Rate calldata _baseLiquidationLimitRate
-    ) external initializer {
+    ) internal onlyInitializing {
         __AccessControl_init();
         __ReentrancyGuard_init();
 
@@ -110,7 +110,7 @@ contract ERC20ValueProvider is
     }
 
     /// @return The value for the collection, in USD.
-    function getPriceUSD() public view returns (uint256) {
+    function getPriceUSD() public virtual view returns (uint256) {
         (, int256 answer, , uint256 timestamp, ) = aggregator.latestRoundData();
 
         if (answer == 0 || timestamp == 0) revert InvalidOracleResults();

@@ -7,6 +7,8 @@ import '@openzeppelin/contracts-upgradeable/utils/AddressUpgradeable.sol';
 import '@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol';
 
 import {IChainlinkV3Aggregator} from '../../../interfaces/IChainlinkV3Aggregator.sol';
+import {IStabilityPool} from '../../../interfaces/IStabilityPool.sol';
+import {IERC721Liquidator} from '../../../interfaces/IERC721Liquidator.sol';
 import {ERC721Vault} from '../../usd/ERC721Vault.sol';
 import {ERC721ShezmuAuction} from './ERC721ShezmuAuction.sol';
 
@@ -14,11 +16,12 @@ import {ERC721ShezmuAuction} from './ERC721ShezmuAuction.sol';
 /// @notice Liquidator contract that allows liquidator bots to liquidate positions without holding any stablecoins/NFTs.
 /// It's only meant to be used by DAO bots.
 /// The liquidated NFTs are auctioned.
-contract ERC721Liquidator is OwnableUpgradeable {
+contract ERC721Liquidator is OwnableUpgradeable, IERC721Liquidator {
     using AddressUpgradeable for address;
 
     error ZeroAddress();
     error InvalidLength();
+    error NeedToRepayDebt();
     error UnknownVault(ERC721Vault vault);
     error InsufficientBalance(IERC20Upgradeable stablecoin);
 
@@ -29,21 +32,27 @@ contract ERC721Liquidator is OwnableUpgradeable {
 
     struct VaultInfo {
         IERC20Upgradeable stablecoin;
+        IStabilityPool stabilityPool;
         address nftOrWrapper;
         bool isWrapped;
     }
 
-    ERC721ShezmuAuction public AUCTION;
+    ERC721ShezmuAuction public auction;
 
     mapping(IERC20Upgradeable => OracleInfo) public stablecoinOracle;
     mapping(ERC721Vault => VaultInfo) public vaultInfo;
+
+    // vault => tokenId => debtAmount
+    mapping(ERC721Vault => mapping(uint256 => uint256))
+        public debtFromStabilityPool;
+    uint256 public totalDebtFromStabilityPool;
 
     function initialize(address _auction) external initializer {
         __Ownable_init();
 
         if (_auction == address(0)) revert ZeroAddress();
 
-        AUCTION = ERC721ShezmuAuction(_auction);
+        auction = ERC721ShezmuAuction(_auction);
     }
 
     /// @notice Allows any address to liquidate multiple positions at once.
@@ -58,8 +67,7 @@ contract ERC721Liquidator is OwnableUpgradeable {
     /// @param _nftVault The address of the NFTVault
     function liquidate(
         uint256[] memory _toLiquidate,
-        ERC721Vault _nftVault,
-        address _auctionOwner
+        ERC721Vault _nftVault
     ) external {
         VaultInfo memory _vaultInfo = vaultInfo[_nftVault];
         if (_vaultInfo.nftOrWrapper == address(0))
@@ -67,9 +75,6 @@ contract ERC721Liquidator is OwnableUpgradeable {
 
         uint256 _length = _toLiquidate.length;
         if (_length == 0) revert InvalidLength();
-
-        uint256 _balance = _vaultInfo.stablecoin.balanceOf(address(this));
-        _vaultInfo.stablecoin.approve(address(_nftVault), _balance);
 
         for (uint256 i; i < _length; ++i) {
             uint256 _nftIndex = _toLiquidate[i];
@@ -87,37 +92,45 @@ contract ERC721Liquidator is OwnableUpgradeable {
                 ? _vaultInfo.nftOrWrapper
                 : address(this);
 
-            try _nftVault.liquidate(_nftIndex, _destAddress) {
-                if (borrowType != ERC721Vault.BorrowType.USE_INSURANCE) {
-                    uint256 _normalizedDebt = _convertDebtAmount(
-                        debtPrincipal + _interest,
-                        stablecoinOracle[_vaultInfo.stablecoin]
+            uint256 debtAmount = debtPrincipal + _interest;
+
+            // borrow from stability pool
+            _vaultInfo.stabilityPool.borrowForLiquidation(debtAmount);
+
+            uint256 _balance = _vaultInfo.stablecoin.balanceOf(address(this));
+            _vaultInfo.stablecoin.approve(address(_nftVault), _balance);
+
+            _nftVault.liquidate(_nftIndex, _destAddress);
+            if (borrowType != ERC721Vault.BorrowType.USE_INSURANCE) {
+                uint256 _normalizedDebt = _convertDebtAmount(
+                    debtAmount,
+                    stablecoinOracle[_vaultInfo.stablecoin]
+                );
+
+                if (!_vaultInfo.isWrapped)
+                    IERC721Upgradeable(_vaultInfo.nftOrWrapper).approve(
+                        address(auction),
+                        _nftIndex
                     );
 
-                    if (!_vaultInfo.isWrapped)
-                        IERC721Upgradeable(_vaultInfo.nftOrWrapper).approve(
-                            address(AUCTION),
-                            _nftIndex
-                        );
-
-                    AUCTION.newAuction(
-                        _auctionOwner,
-                        IERC721Upgradeable(_vaultInfo.nftOrWrapper),
-                        _nftIndex,
-                        _normalizedDebt
-                    );
-                }
-            } catch Error(string memory _reason) {
-                //insufficient allowance -> insufficient balance
-                if (
-                    keccak256(abi.encodePacked(_reason)) ==
-                    keccak256(abi.encodePacked('ERC20: insufficient allowance'))
-                ) revert InsufficientBalance(_vaultInfo.stablecoin);
+                auction.newAuction(
+                    address(this),
+                    IERC721Upgradeable(_vaultInfo.nftOrWrapper),
+                    _nftIndex,
+                    _normalizedDebt
+                );
             }
-        }
 
-        //reset appoval
-        _vaultInfo.stablecoin.approve(address(_nftVault), 0);
+            if (debtFromStabilityPool[_nftVault][_nftIndex] > 0) {
+                revert NeedToRepayDebt();
+            }
+
+            totalDebtFromStabilityPool += debtAmount;
+            debtFromStabilityPool[_nftVault][_nftIndex] += debtAmount;
+
+            //reset appoval
+            _vaultInfo.stablecoin.approve(address(_nftVault), 0);
+        }
     }
 
     /// @notice Allows any address to claim NFTs from multiple expired insurance postions at once.
@@ -129,8 +142,7 @@ contract ERC721Liquidator is OwnableUpgradeable {
     /// @param _nftVault The address of the NFTVault
     function claimExpiredInsuranceNFT(
         uint256[] memory _toClaim,
-        ERC721Vault _nftVault,
-        address _auctionOwner
+        ERC721Vault _nftVault
     ) external {
         VaultInfo memory _vaultInfo = vaultInfo[_nftVault];
         if (_vaultInfo.nftOrWrapper == address(0))
@@ -149,33 +161,66 @@ contract ERC721Liquidator is OwnableUpgradeable {
                 ? _vaultInfo.nftOrWrapper
                 : address(this);
 
-            try _nftVault.claimExpiredInsuranceNFT(_nftIndex, _destAddress) {
-                uint256 _normalizedDebt = _convertDebtAmount(
-                    debtAmountForRepurchase,
-                    stablecoinOracle[_vaultInfo.stablecoin]
+            _nftVault.claimExpiredInsuranceNFT(_nftIndex, _destAddress);
+            uint256 _normalizedDebt = _convertDebtAmount(
+                debtAmountForRepurchase,
+                stablecoinOracle[_vaultInfo.stablecoin]
+            );
+
+            if (!_vaultInfo.isWrapped)
+                IERC721Upgradeable(_vaultInfo.nftOrWrapper).approve(
+                    address(auction),
+                    _nftIndex
                 );
 
-                if (!_vaultInfo.isWrapped)
-                    IERC721Upgradeable(_vaultInfo.nftOrWrapper).approve(
-                        address(AUCTION),
-                        _nftIndex
-                    );
-
-                AUCTION.newAuction(
-                    _auctionOwner,
-                    IERC721Upgradeable(_vaultInfo.nftOrWrapper),
-                    _nftIndex,
-                    _normalizedDebt
-                );
-            } catch {
-                //catch and ignore claim errors
-            }
+            auction.newAuction(
+                address(this),
+                IERC721Upgradeable(_vaultInfo.nftOrWrapper),
+                _nftIndex,
+                _normalizedDebt
+            );
         }
+    }
+
+    /// @notice Hook function for repurchase after liquidation
+    function onRepurchase(address _nftVault, uint256 _nftIndex) external {
+        ERC721Vault nftVault = ERC721Vault(_nftVault);
+        VaultInfo memory _vaultInfo = vaultInfo[nftVault];
+        if (_vaultInfo.nftOrWrapper == address(0)) {
+            revert UnknownVault(nftVault);
+        }
+        if (msg.sender != _nftVault) {
+            revert UnknownVault(nftVault);
+        }
+
+        uint256 debtAmount = debtFromStabilityPool[nftVault][_nftIndex];
+        debtFromStabilityPool[nftVault][_nftIndex] = 0;
+        totalDebtFromStabilityPool -= debtAmount;
+        _vaultInfo.stabilityPool.repayFromLiquidation(debtAmount, debtAmount);
+    }
+
+    /// @notice Allows the owner to repay for stability pool
+    /// @dev This will happen after auction close and sell it on market
+    function repayFromLiquidation(
+        ERC721Vault _nftVault,
+        uint256 _nftIndex,
+        uint256 _repayAmount
+    ) external onlyOwner {
+        VaultInfo memory _vaultInfo = vaultInfo[_nftVault];
+        if (_vaultInfo.nftOrWrapper == address(0)) {
+            revert UnknownVault(_nftVault);
+        }
+
+        uint256 debtAmount = debtFromStabilityPool[_nftVault][_nftIndex];
+        debtFromStabilityPool[_nftVault][_nftIndex] = 0;
+        totalDebtFromStabilityPool -= debtAmount;
+        _vaultInfo.stabilityPool.repayFromLiquidation(debtAmount, _repayAmount);
     }
 
     /// @notice Allows the owner to add information about a NFTVault
     function addNFTVault(
         ERC721Vault _nftVault,
+        IStabilityPool _stabilityPool,
         address _nftOrWrapper,
         bool _isWrapped
     ) external onlyOwner {
@@ -184,6 +229,7 @@ contract ERC721Liquidator is OwnableUpgradeable {
 
         vaultInfo[_nftVault] = VaultInfo(
             IERC20Upgradeable(_nftVault.stablecoin()),
+            _stabilityPool,
             _nftOrWrapper,
             _isWrapped
         );
@@ -205,8 +251,6 @@ contract ERC721Liquidator is OwnableUpgradeable {
 
         stablecoinOracle[_stablecoin] = OracleInfo(_oracle, _oracle.decimals());
     }
-
-    function claimETH() external onlyOwner {}
 
     /// @notice Allows the DAO to perform multiple calls using this contract (recovering funds/NFTs stuck in this contract)
     /// @param _targets The target addresses

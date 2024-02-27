@@ -5,10 +5,12 @@ import '@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol'
 import '@openzeppelin/contracts-upgradeable/security/ReentrancyGuardUpgradeable.sol';
 import '@openzeppelin/contracts-upgradeable/token/ERC721/IERC721Upgradeable.sol';
 import '@openzeppelin/contracts-upgradeable/utils/structs/EnumerableSetUpgradeable.sol';
+import '@openzeppelin/contracts-upgradeable/utils/AddressUpgradeable.sol';
 import '@openzeppelin/contracts-upgradeable/token/ERC20/utils/SafeERC20Upgradeable.sol';
 
 import '../../interfaces/IChainlinkV3Aggregator.sol';
 import '../../interfaces/IStableCoin.sol';
+import '../../interfaces/IERC721Liquidator.sol';
 import '../../utils/RateLib.sol';
 import {ERC721ValueProvider} from './ERC721ValueProvider.sol';
 
@@ -709,6 +711,13 @@ contract ERC721Vault is AccessControlUpgradeable, ReentrancyGuardUpgradeable {
         IStableCoin _stablecoin = stablecoin;
         _stablecoin.burnFrom(_account, _repayAmount + _penalty);
         _stablecoin.mint(_liquidator, _debtAmount);
+
+        if (AddressUpgradeable.isContract(_liquidator)) {
+            IERC721Liquidator(_liquidator).onRepurchase(
+                address(this),
+                _nftIndex
+            );
+        }
 
         emit LiquidationRepayment(_account, _nftIndex, _repayAmount);
     }

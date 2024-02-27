@@ -114,9 +114,9 @@ contract ERC1155ShezmuAuction is
         uint256 _idx,
         uint256 _amount,
         uint256 _minBid
-    ) external {
+    ) external returns (uint256){
         uint256 _startTime = _getNextSlotStart();
-        _newAuction(
+        return _newAuction(
             _owner,
             _nft,
             _idx,
@@ -141,8 +141,8 @@ contract ERC1155ShezmuAuction is
         uint256 _startTime,
         uint256 _endTime,
         uint256 _minBid
-    ) external onlyRole(DEFAULT_ADMIN_ROLE) {
-        _newAuction(_owner, _nft, _idx, _amount, _startTime, _endTime, _minBid);
+    ) external onlyRole(DEFAULT_ADMIN_ROLE) returns(uint256){
+        return _newAuction(_owner, _nft, _idx, _amount, _startTime, _endTime, _minBid);
     }
 
     /// @notice Allows the admin to cancel an ongoing auction with no bids
@@ -370,7 +370,7 @@ contract ERC1155ShezmuAuction is
         uint256 _startTime,
         uint256 _endTime,
         uint256 _minBid
-    ) internal {
+    ) internal returns(uint256){
         if (address(_nft) == address(0)) revert ZeroAddress();
         if (
             block.timestamp > _startTime ||
@@ -390,6 +390,8 @@ contract ERC1155ShezmuAuction is
         _nft.safeTransferFrom(msg.sender, address(this), _idx, _amount, '0x');
 
         emit NewAuction(auctionsLength - 1, _nft, _idx, _amount, _startTime);
+
+        return auctionsLength - 1;
     }
 
     function _getNextSlotStart() internal view returns (uint256) {

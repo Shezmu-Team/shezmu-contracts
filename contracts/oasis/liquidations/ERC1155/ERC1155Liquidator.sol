@@ -8,6 +8,7 @@ import '@openzeppelin/contracts-upgradeable/utils/AddressUpgradeable.sol';
 import '@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol';
 
 import {IChainlinkV3Aggregator} from '../../../interfaces/IChainlinkV3Aggregator.sol';
+import {IStabilityPool} from '../../../interfaces/IStabilityPool.sol';
 import {ERC1155Vault} from '../../usd/ERC1155Vault.sol';
 import {ERC1155ShezmuAuction} from './ERC1155ShezmuAuction.sol';
 
@@ -30,21 +31,27 @@ contract ERC1155Liquidator is OwnableUpgradeable, IERC1155ReceiverUpgradeable {
 
     struct VaultInfo {
         IERC20Upgradeable stablecoin;
+        IStabilityPool stabilityPool;
         address nft;
         uint256 tokenIndex;
     }
 
-    ERC1155ShezmuAuction public AUCTION;
+    ERC1155ShezmuAuction public auction;
 
     mapping(IERC20Upgradeable => OracleInfo) public stablecoinOracle;
     mapping(ERC1155Vault => VaultInfo) public vaultInfo;
+
+    // vault => auctionIndex => debtAmount
+    mapping(ERC1155Vault => mapping(uint256 => uint256))
+        public debtFromStabilityPool;
+    uint256 public totalDebtFromStabilityPool;
 
     function initialize(address _auction) external initializer {
         __Ownable_init();
 
         if (_auction == address(0)) revert ZeroAddress();
 
-        AUCTION = ERC1155ShezmuAuction(_auction);
+        auction = ERC1155ShezmuAuction(_auction);
     }
 
     /// @notice Allows any address to liquidate multiple positions at once.
@@ -59,17 +66,13 @@ contract ERC1155Liquidator is OwnableUpgradeable, IERC1155ReceiverUpgradeable {
     /// @param _nftVault The address of the NFTVault
     function liquidate(
         address[] memory _toLiquidate,
-        ERC1155Vault _nftVault,
-        address _auctionOwner
+        ERC1155Vault _nftVault
     ) external {
         VaultInfo memory _vaultInfo = vaultInfo[_nftVault];
         if (_vaultInfo.nft == address(0)) revert UnknownVault(_nftVault);
 
         uint256 _length = _toLiquidate.length;
         if (_length == 0) revert InvalidLength();
-
-        uint256 _balance = _vaultInfo.stablecoin.balanceOf(address(this));
-        _vaultInfo.stablecoin.approve(address(_nftVault), _balance);
 
         for (uint256 i; i < _length; ++i) {
             address _user = _toLiquidate[i];
@@ -78,46 +81,68 @@ contract ERC1155Liquidator is OwnableUpgradeable, IERC1155ReceiverUpgradeable {
                 _user
             );
             uint256 _interest = _nftVault.getDebtInterest(_user);
+            uint256 debtAmount = debtPrincipal + _interest;
 
-            try _nftVault.liquidate(_user, address(this)) {
-                uint256 _normalizedDebt = _convertDebtAmount(
-                    debtPrincipal + _interest,
-                    stablecoinOracle[_vaultInfo.stablecoin]
-                );
+            // borrow from stability pool
+            _vaultInfo.stabilityPool.borrowForLiquidation(debtAmount);
 
-                IERC1155Upgradeable(_vaultInfo.nft).setApprovalForAll(
-                    address(AUCTION),
-                    true
-                );
+            uint256 _balance = _vaultInfo.stablecoin.balanceOf(address(this));
+            _vaultInfo.stablecoin.approve(address(_nftVault), _balance);
 
-                AUCTION.newAuction(
-                    _auctionOwner,
-                    IERC1155Upgradeable(_vaultInfo.nft),
-                    _vaultInfo.tokenIndex,
-                    collateral,
-                    _normalizedDebt
-                );
+            _nftVault.liquidate(_user, address(this));
+            uint256 _normalizedDebt = _convertDebtAmount(
+                debtAmount,
+                stablecoinOracle[_vaultInfo.stablecoin]
+            );
 
-                IERC1155Upgradeable(_vaultInfo.nft).setApprovalForAll(
-                    address(AUCTION),
-                    false
-                );
-            } catch Error(string memory _reason) {
-                //insufficient allowance -> insufficient balance
-                if (
-                    keccak256(abi.encodePacked(_reason)) ==
-                    keccak256(abi.encodePacked('ERC20: insufficient allowance'))
-                ) revert InsufficientBalance(_vaultInfo.stablecoin);
-            }
+            IERC1155Upgradeable(_vaultInfo.nft).setApprovalForAll(
+                address(auction),
+                true
+            );
+
+            uint256 auctionIndex = auction.newAuction(
+                address(this),
+                IERC1155Upgradeable(_vaultInfo.nft),
+                _vaultInfo.tokenIndex,
+                collateral,
+                _normalizedDebt
+            );
+
+            totalDebtFromStabilityPool += debtAmount;
+            debtFromStabilityPool[_nftVault][auctionIndex] += debtAmount;
+
+            IERC1155Upgradeable(_vaultInfo.nft).setApprovalForAll(
+                address(auction),
+                false
+            );
+
+            //reset appoval
+            _vaultInfo.stablecoin.approve(address(_nftVault), 0);
+        }
+    }
+
+    /// @notice Allows the owner to repay for stability pool
+    /// @dev This will happen after auction close and sell it on market
+    function repayFromLiquidation(
+        ERC1155Vault _nftVault,
+        uint256 _auctionIndex,
+        uint256 _repayAmount
+    ) external onlyOwner {
+        VaultInfo memory _vaultInfo = vaultInfo[_nftVault];
+        if (_vaultInfo.nft == address(0)) {
+            revert UnknownVault(_nftVault);
         }
 
-        //reset appoval
-        _vaultInfo.stablecoin.approve(address(_nftVault), 0);
+        uint256 debtAmount = debtFromStabilityPool[_nftVault][_auctionIndex];
+        debtFromStabilityPool[_nftVault][_auctionIndex] = 0;
+        totalDebtFromStabilityPool -= debtAmount;
+        _vaultInfo.stabilityPool.repayFromLiquidation(debtAmount, _repayAmount);
     }
 
     /// @notice Allows the owner to add information about a NFTVault
     function addNFTVault(
         ERC1155Vault _nftVault,
+        IStabilityPool _stabilityPool,
         address _nft,
         uint256 _tokenIndex
     ) external onlyOwner {
@@ -126,6 +151,7 @@ contract ERC1155Liquidator is OwnableUpgradeable, IERC1155ReceiverUpgradeable {
 
         vaultInfo[_nftVault] = VaultInfo(
             IERC20Upgradeable(_nftVault.stablecoin()),
+            _stabilityPool,
             _nft,
             _tokenIndex
         );
@@ -210,7 +236,6 @@ contract ERC1155Liquidator is OwnableUpgradeable, IERC1155ReceiverUpgradeable {
     function supportsInterface(
         bytes4 interfaceId
     ) external view returns (bool) {
-        return
-            interfaceId == type(IERC1155ReceiverUpgradeable).interfaceId;
+        return interfaceId == type(IERC1155ReceiverUpgradeable).interfaceId;
     }
 }

@@ -8,7 +8,7 @@ import '../../utils/AccessControlUpgradeable.sol';
 import '../../utils/RateLib.sol';
 import '../../interfaces/IChainlinkV3Aggregator.sol';
 
-contract ERC1155ValueProvider is
+abstract contract ERC1155ValueProvider is
     ReentrancyGuardUpgradeable,
     AccessControlUpgradeable
 {
@@ -27,7 +27,7 @@ contract ERC1155ValueProvider is
     /// a value set by the DAO will be used instead
     bool public daoFloorOverride;
     /// @notice Value of floor set by the DAO. Only used if `daoFloorOverride` is true
-    uint256 private overriddenFloorValueETH;
+    uint256 public overriddenFloorValueUSD;
 
     RateLib.Rate public baseCreditLimitRate;
     RateLib.Rate public baseLiquidationLimitRate;
@@ -36,11 +36,11 @@ contract ERC1155ValueProvider is
     /// @param _aggregator The NFT floor oracles aggregator
     /// @param _baseCreditLimitRate The base credit limit rate
     /// @param _baseLiquidationLimitRate The base liquidation limit rate
-    function initialize(
+    function __initialize(
         IChainlinkV3Aggregator _aggregator,
         RateLib.Rate calldata _baseCreditLimitRate,
         RateLib.Rate calldata _baseLiquidationLimitRate
-    ) external initializer {
+    ) internal onlyInitializing {
         __AccessControl_init();
         __ReentrancyGuard_init();
 
@@ -102,10 +102,10 @@ contract ERC1155ValueProvider is
         return _liquidationLimitRate.calculate(getNFTValueUSD(_colAmount));
     }
 
-    /// @return The floor value for the collection, in ETH.
-    function getFloorUSD() public view returns (uint256) {
+    /// @return The floor value for the collection, in USD.
+    function getFloorUSD() public view virtual returns (uint256) {
         if (daoFloorOverride) {
-            return overriddenFloorValueETH;
+            return overriddenFloorValueUSD;
         }
 
         (, int256 answer, , uint256 timestamp, ) = aggregator.latestRoundData();
@@ -124,7 +124,7 @@ contract ERC1155ValueProvider is
     }
 
     /// @param _colAmount The collateral amount
-    /// @return The value in ETH of the NFT at index `_nftIndex`, with 18 decimals.
+    /// @return The value in USD of the NFT at index `_nftIndex`, with 18 decimals.
     function getNFTValueUSD(uint256 _colAmount) public view returns (uint256) {
         uint256 _floor = getFloorUSD();
         return _floor * _colAmount;
@@ -136,7 +136,7 @@ contract ERC1155ValueProvider is
         uint256 _newFloor
     ) external onlyRole(DEFAULT_ADMIN_ROLE) {
         if (_newFloor == 0) revert InvalidAmount(_newFloor);
-        overriddenFloorValueETH = _newFloor;
+        overriddenFloorValueUSD = _newFloor;
         daoFloorOverride = true;
 
         emit DaoFloorChanged(_newFloor);
