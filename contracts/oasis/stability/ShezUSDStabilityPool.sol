@@ -13,16 +13,24 @@ contract ShezUSDStabilityPool is
 {
     using SafeERC20Upgradeable for IERC20Upgradeable;
 
+    event Deposit(address user, uint256 amount, uint256 share);
+    event Withdraw(address user, uint256 amount, uint256 share);
     event BorrowForLiquidation(address indexed liquidator, uint256 amount);
     event RepayFromLiquidation(
         address indexed liquidator,
         uint256 borrowed,
         uint256 repaid
     );
+    event WithdrawToken(
+        address indexed owner,
+        address indexed token,
+        uint256 amount
+    );
 
     bytes32 private constant LIQUIDATOR_ROLE = keccak256('LIQUIDATOR_ROLE');
 
     IERC20Upgradeable public shezUSD;
+    uint256 public totalAssets;
     uint256 public totalDebt;
     mapping(address => uint256) public debtOf;
 
@@ -34,28 +42,27 @@ contract ShezUSDStabilityPool is
         shezUSD = IERC20Upgradeable(_shezUSD);
     }
 
-    function totalAssets() public view returns (uint256) {
-        return shezUSD.balanceOf(address(this)) + totalDebt;
-    }
-
     function amountToShare(uint256 amount) public view returns (uint256 share) {
-        if (totalAssets() == 0) return amount;
+        if (totalAssets == 0) return amount;
 
-        share = (amount * totalSupply()) / totalAssets();
+        share = (amount * totalSupply()) / totalAssets;
     }
 
     function shareToAmount(uint256 share) public view returns (uint256 amount) {
         if (totalSupply() == 0) return share;
 
-        amount = (share * totalAssets()) / totalSupply();
+        amount = (share * totalAssets) / totalSupply();
     }
 
     function deposit(uint256 amount) external nonReentrant {
         uint256 share = amountToShare(amount);
 
         shezUSD.safeTransferFrom(msg.sender, address(this), amount);
+        totalAssets += amount;
 
         _mint(msg.sender, share);
+
+        emit Deposit(msg.sender, amount, share);
     }
 
     function withdraw(uint256 share) external nonReentrant {
@@ -68,7 +75,10 @@ contract ShezUSDStabilityPool is
 
         _burn(msg.sender, share);
 
+        totalAssets -= amount;
         shezUSD.safeTransfer(msg.sender, amount);
+
+        emit Withdraw(msg.sender, amount, share);
     }
 
     function borrowForLiquidation(uint256 amount) external {
@@ -89,9 +99,24 @@ contract ShezUSDStabilityPool is
 
         shezUSD.safeTransferFrom(msg.sender, address(this), repaid);
 
+        totalAssets += repaid - borrowed;
         totalDebt -= borrowed;
         debtOf[msg.sender] -= borrowed;
 
         emit RepayFromLiquidation(msg.sender, borrowed, repaid);
+    }
+
+    /// @notice withdraw tokens sent by accident
+    function withdrawToken(address token) external {
+        _checkRole(DEFAULT_ADMIN_ROLE, msg.sender);
+
+        uint256 amount = IERC20Upgradeable(token).balanceOf(address(this));
+        if (token == address(shezUSD)) {
+            amount -= totalAssets;
+        }
+
+        IERC20Upgradeable(token).safeTransfer(msg.sender, amount);
+
+        emit WithdrawToken(msg.sender, token, amount);
     }
 }
