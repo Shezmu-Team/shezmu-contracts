@@ -5,15 +5,18 @@ import '@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol'
 import '@openzeppelin/contracts-upgradeable/security/ReentrancyGuardUpgradeable.sol';
 import '@openzeppelin/contracts-upgradeable/token/ERC20/extensions/ERC4626Upgradeable.sol';
 import '@openzeppelin/contracts-upgradeable/token/ERC20/utils/SafeERC20Upgradeable.sol';
+import '../../utils/RateLib.sol';
 
 contract ShezUSDStabilityPool is
     ERC4626Upgradeable,
     AccessControlUpgradeable,
     ReentrancyGuardUpgradeable
 {
+    using RateLib for RateLib.Rate;
     using SafeERC20Upgradeable for IERC20Upgradeable;
 
-    event BorrowForLiquidation(address indexed liquidator, uint256 amount);
+    event WithdrawRequest(address indexed user, uint256 assets);
+    event BorrowForLiquidation(address indexed liquidator, uint256 assets);
     event RepayFromLiquidation(
         address indexed liquidator,
         uint256 borrowed,
@@ -22,7 +25,7 @@ contract ShezUSDStabilityPool is
     event RescueToken(
         address indexed owner,
         address indexed token,
-        uint256 amount
+        uint256 assets
     );
 
     bytes32 private constant LIQUIDATOR_ROLE = keccak256('LIQUIDATOR_ROLE');
@@ -31,10 +34,22 @@ contract ShezUSDStabilityPool is
     uint256 public totalDebt;
     mapping(address => uint256) public debtOf;
 
-    function initialize(IERC20Upgradeable _shezUSD) external initializer {
+    RateLib.Rate public maxBorrowRate;
+
+    function initialize(
+        IERC20Upgradeable _shezUSD,
+        RateLib.Rate calldata _maxBorrowRate
+    ) external initializer {
         __ERC4626_init(_shezUSD);
         __AccessControl_init();
         __ReentrancyGuard_init();
+        maxBorrowRate = _maxBorrowRate;
+    }
+
+    function setMaxBorrowRate(RateLib.Rate calldata _maxBorrowRate) external {
+        _checkRole(DEFAULT_ADMIN_ROLE, msg.sender);
+
+        maxBorrowRate = _maxBorrowRate;
     }
 
     function totalAssets() public view override returns (uint256) {
@@ -84,6 +99,11 @@ contract ShezUSDStabilityPool is
 
     function borrowForLiquidation(uint256 amount) external {
         _checkRole(LIQUIDATOR_ROLE, msg.sender);
+
+        require(
+            maxBorrowRate.calculate(_totalAssets) >= totalDebt,
+            'not enough to borrow'
+        );
 
         debtOf[msg.sender] += amount;
         totalDebt += amount;
