@@ -91,19 +91,6 @@ contract ERC1155ShezmuAuction is
         setMinimumIncrementRate(_incrementRate);
     }
 
-    function finalizeUpgrade(
-        address _admin,
-        uint256 _auctionDuration
-    ) external {
-        bytes32 _role = keccak256('UPGRADED');
-        if (hasRole(_role, address(this))) revert();
-
-        auctionDuration = _auctionDuration;
-
-        _grantRole(_role, address(this));
-        _grantRole(DEFAULT_ADMIN_ROLE, _admin);
-    }
-
     /// @notice Allows whitelisted addresses to create a new auction in the next slot.
     /// @param _nft The address of the NFT to sell
     /// @param _idx The index of the NFT to sell
@@ -114,17 +101,18 @@ contract ERC1155ShezmuAuction is
         uint256 _idx,
         uint256 _amount,
         uint256 _minBid
-    ) external returns (uint256){
+    ) external returns (uint256) {
         uint256 _startTime = _getNextSlotStart();
-        return _newAuction(
-            _owner,
-            _nft,
-            _idx,
-            _amount,
-            _startTime,
-            _startTime + auctionDuration,
-            _minBid
-        );
+        return
+            _newAuction(
+                _owner,
+                _nft,
+                _idx,
+                _amount,
+                _startTime,
+                _startTime + auctionDuration,
+                _minBid
+            );
     }
 
     /// @notice Allows the admin to create a new auction
@@ -141,8 +129,17 @@ contract ERC1155ShezmuAuction is
         uint256 _startTime,
         uint256 _endTime,
         uint256 _minBid
-    ) external onlyRole(DEFAULT_ADMIN_ROLE) returns(uint256){
-        return _newAuction(_owner, _nft, _idx, _amount, _startTime, _endTime, _minBid);
+    ) external onlyRole(DEFAULT_ADMIN_ROLE) returns (uint256) {
+        return
+            _newAuction(
+                _owner,
+                _nft,
+                _idx,
+                _amount,
+                _startTime,
+                _endTime,
+                _minBid
+            );
     }
 
     /// @notice Allows the admin to cancel an ongoing auction with no bids
@@ -300,10 +297,9 @@ contract ERC1155ShezmuAuction is
 
     /// @notice Allows admins to withdraw an unsold NFT
     /// @param _auctionIndex The auction to withdraw the NFT from.
-    function withdrawUnsoldNFT(
-        uint256 _auctionIndex
-    ) external onlyRole(DEFAULT_ADMIN_ROLE) {
+    function withdrawUnsoldNFT(uint256 _auctionIndex) external {
         Auction storage auction = auctions[_auctionIndex];
+        if (auction.creator != msg.sender) revert Unauthorized();
 
         address _highestBidder = auction.highestBidOwner;
         if (
@@ -370,7 +366,7 @@ contract ERC1155ShezmuAuction is
         uint256 _startTime,
         uint256 _endTime,
         uint256 _minBid
-    ) internal returns(uint256){
+    ) internal returns (uint256) {
         if (address(_nft) == address(0)) revert ZeroAddress();
         if (
             block.timestamp > _startTime ||
