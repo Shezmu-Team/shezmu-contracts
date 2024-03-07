@@ -142,18 +142,15 @@ contract ERC1155Liquidator is OwnableUpgradeable, IERC1155ReceiverUpgradeable {
     /// @notice Allows the owner to add information about a NFTVault
     function addNFTVault(
         ERC1155Vault _nftVault,
-        IStabilityPool _stabilityPool,
-        address _nft,
-        uint256 _tokenIndex
+        IStabilityPool _stabilityPool
     ) external onlyOwner {
-        if (address(_nftVault) == address(0) || _nft == address(0))
-            revert ZeroAddress();
+        if (address(_nftVault) == address(0)) revert ZeroAddress();
 
         vaultInfo[_nftVault] = VaultInfo(
             IERC20Upgradeable(_nftVault.stablecoin()),
             _stabilityPool,
-            _nft,
-            _tokenIndex
+            address(_nftVault.tokenContract()),
+            _nftVault.tokenIndex()
         );
     }
 
