@@ -148,7 +148,7 @@ contract ERC1155ShezmuAuction is
     function cancelAuction(
         uint256 _auctionIndex,
         address _nftRecipient
-    ) external {
+    ) external nonReentrant {
         if (_nftRecipient == address(0)) revert ZeroAddress();
 
         Auction storage auction = auctions[_auctionIndex];
@@ -274,7 +274,7 @@ contract ERC1155ShezmuAuction is
 
     /// @notice Allows admins to withdraw ETH after a successful auction.
     /// @param _auctionIndex The auction to withdraw the ETH from
-    function withdrawETH(uint256 _auctionIndex) external {
+    function withdrawETH(uint256 _auctionIndex) external nonReentrant {
         Auction storage auction = auctions[_auctionIndex];
         if (auction.creator != msg.sender) revert Unauthorized();
 
@@ -287,17 +287,17 @@ contract ERC1155ShezmuAuction is
 
         auction.ownerClaimed = true;
 
+        emit ETHClaimed(_auctionIndex);
+
         (bool _sent, ) = payable(msg.sender).call{
             value: auction.bids[_highestBidder]
         }('');
         assert(_sent);
-
-        emit ETHClaimed(_auctionIndex);
     }
 
     /// @notice Allows admins to withdraw an unsold NFT
     /// @param _auctionIndex The auction to withdraw the NFT from.
-    function withdrawUnsoldNFT(uint256 _auctionIndex) external {
+    function withdrawUnsoldNFT(uint256 _auctionIndex) external nonReentrant {
         Auction storage auction = auctions[_auctionIndex];
         if (auction.creator != msg.sender) revert Unauthorized();
 
