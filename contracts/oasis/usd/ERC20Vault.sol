@@ -46,6 +46,8 @@ contract ERC20Vault is AbstractAssetVault {
         address _account,
         uint256 _colAmount
     ) internal override {
+        if (_colAmount == 0) revert InvalidAmount(_colAmount);
+
         tokenContract.safeTransferFrom(_account, address(this), _colAmount);
 
         Position storage position = positions[_account];
