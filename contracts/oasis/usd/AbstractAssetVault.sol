@@ -287,6 +287,8 @@ abstract contract AbstractAssetVault is
     function setSettings(
         VaultSettings calldata _settings
     ) external onlyRole(SETTER_ROLE) {
+        accrue();
+
         settings = _settings;
     }
 

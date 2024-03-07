@@ -401,6 +401,8 @@ contract ERC721Vault is AccessControlUpgradeable, ReentrancyGuardUpgradeable {
     function setSettings(
         VaultSettings calldata _settings
     ) external onlyRole(SETTER_ROLE) {
+        accrue();
+
         settings = _settings;
     }
 
