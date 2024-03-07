@@ -1,158 +1,150 @@
 // SPDX-License-Identifier: GPL-3.0
 pragma solidity 0.8.17;
 
+import '@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol';
 import '@openzeppelin/contracts-upgradeable/security/ReentrancyGuardUpgradeable.sol';
+import '@openzeppelin/contracts-upgradeable/utils/structs/EnumerableSetUpgradeable.sol';
 import '@openzeppelin/contracts-upgradeable/token/ERC20/utils/SafeERC20Upgradeable.sol';
-import '@openzeppelin/contracts-upgradeable/token/ERC20/extensions/IERC20MetadataUpgradeable.sol';
 
-import '../../utils/AccessControlUpgradeable.sol';
-import '../../utils/RateLib.sol';
 import '../../interfaces/IChainlinkV3Aggregator.sol';
+import '../../interfaces/IStableCoin.sol';
+import '../../utils/RateLib.sol';
+import {ERC20ValueProvider} from './ERC20ValueProvider.sol';
+import {AbstractAssetVault} from './AbstractAssetVault.sol';
 
-abstract contract ERC20ValueProvider is
-    ReentrancyGuardUpgradeable,
-    AccessControlUpgradeable
-{
+/// @title ERC20 lending vault
+/// @notice This contracts allows users to borrow ShezmuUSD using ERC20 tokens as collateral.
+/// The price of the collateral token is fetched using a chainlink oracle
+contract ERC20Vault is AbstractAssetVault {
+    using SafeERC20Upgradeable for IERC20Upgradeable;
+    using SafeERC20Upgradeable for IStableCoin;
+    using EnumerableSetUpgradeable for EnumerableSetUpgradeable.AddressSet;
     using RateLib for RateLib.Rate;
+    /// @notice The Shezmu trait boost locker contract
+    ERC20ValueProvider public valueProvider;
 
-    error InvalidAmount(uint256 amount);
-    error ZeroAddress();
-    error InvalidOracleResults();
-
-    event NewBaseCreditLimitRate(RateLib.Rate rate);
-    event NewBaseLiquidationLimitRate(RateLib.Rate rate);
-
-    /// @notice The token oracles aggregator
-    IChainlinkV3Aggregator public aggregator;
-
-    /// @notice The token address
-    IERC20MetadataUpgradeable public token;
-
-    RateLib.Rate public baseCreditLimitRate;
-    RateLib.Rate public baseLiquidationLimitRate;
+    IERC20Upgradeable public tokenContract;
 
     /// @notice This function is only called once during deployment of the proxy contract. It's not called after upgrades.
-    /// @param _aggregator The token oracles aggregator
-    /// @param _token The token address
-    /// @param _baseCreditLimitRate The base credit limit rate
-    /// @param _baseLiquidationLimitRate The base liquidation limit rate
-    function __initialize(
-        IChainlinkV3Aggregator _aggregator,
-        IERC20MetadataUpgradeable _token,
-        RateLib.Rate calldata _baseCreditLimitRate,
-        RateLib.Rate calldata _baseLiquidationLimitRate
-    ) internal onlyInitializing {
-        __AccessControl_init();
-        __ReentrancyGuard_init();
-
-        if (address(_aggregator) == address(0)) revert ZeroAddress();
-
-        _validateRateBelowOne(_baseCreditLimitRate);
-        _validateRateBelowOne(_baseLiquidationLimitRate);
-
-        _grantRole(DEFAULT_ADMIN_ROLE, msg.sender);
-
-        aggregator = _aggregator;
-        token = _token;
-        baseCreditLimitRate = _baseCreditLimitRate;
-        baseLiquidationLimitRate = _baseLiquidationLimitRate;
+    /// @param _stablecoin ShezUSD address
+    /// @param _tokenContract The collateral token address
+    /// @param _valueProvider The collateral token value provider
+    /// @param _settings Initial settings used by the contract
+    function initialize(
+        IStableCoin _stablecoin,
+        IERC20Upgradeable _tokenContract,
+        ERC20ValueProvider _valueProvider,
+        VaultSettings calldata _settings
+    ) external initializer {
+        __initialize(_stablecoin, _settings);
+        tokenContract = _tokenContract;
+        valueProvider = _valueProvider;
     }
 
-    /// @param _owner The owner address
-    /// @param _colAmount The collateral amount
-    /// @return The credit limit rate
-    function getCreditLimitRate(
-        address _owner,
+    /// @dev See {addCollateral}
+    function _addCollateral(
+        address _account,
         uint256 _colAmount
-    ) public view returns (RateLib.Rate memory) {
-        return baseCreditLimitRate;
-    }
+    ) internal override {
+        if (_colAmount == 0) revert InvalidAmount(_colAmount);
 
-    /// @param _owner The owner address
-    /// @param _colAmount The collateral amount
-    /// @return The liquidation limit rate
-    function getLiquidationLimitRate(
-        address _owner,
-        uint256 _colAmount
-    ) public view returns (RateLib.Rate memory) {
-        return baseLiquidationLimitRate;
-    }
+        tokenContract.safeTransferFrom(_account, address(this), _colAmount);
 
-    /// @param _owner The owner address
-    /// @param _colAmount The collateral amount
-    /// @return The credit limit for collateral amount
-    function getCreditLimitUSD(
-        address _owner,
-        uint256 _colAmount
-    ) external view returns (uint256) {
-        RateLib.Rate memory _creditLimitRate = getCreditLimitRate(
-            _owner,
-            _colAmount
-        );
-        return _creditLimitRate.calculate(getPriceUSD(_colAmount));
-    }
+        Position storage position = positions[_account];
 
-    /// @param _owner The owner address
-    /// @param _colAmount The collateral amount
-    /// @return The liquidation limit for collateral amount
-    function getLiquidationLimitUSD(
-        address _owner,
-        uint256 _colAmount
-    ) external view returns (uint256) {
-        RateLib.Rate memory _liquidationLimitRate = getLiquidationLimitRate(
-            _owner,
-            _colAmount
-        );
-        return _liquidationLimitRate.calculate(getPriceUSD(_colAmount));
-    }
-
-    /// @return The value for the collection, in USD.
-    function getPriceUSD(uint256 colAmount) public view returns (uint256) {
-        uint256 price = getPriceUSD();
-        return (price * colAmount) / (10 ** token.decimals());
-    }
-
-    /// @return The value for the collection, in USD.
-    function getPriceUSD() public view virtual returns (uint256) {
-        (, int256 answer, , uint256 timestamp, ) = aggregator.latestRoundData();
-
-        if (answer == 0 || timestamp == 0) revert InvalidOracleResults();
-
-        uint8 decimals = aggregator.decimals();
-
-        unchecked {
-            //converts the answer to have 18 decimals
-            return
-                decimals > 18
-                    ? uint256(answer) / 10 ** (decimals - 18)
-                    : uint256(answer) * 10 ** (18 - decimals);
+        if (!userIndexes.contains(_account)) {
+            userIndexes.add(_account);
         }
+        position.collateral += _colAmount;
+
+        emit CollateralAdded(_account, _colAmount);
     }
 
-    function setBaseCreditLimitRate(
-        RateLib.Rate memory _baseCreditLimitRate
-    ) external onlyRole(DEFAULT_ADMIN_ROLE) {
-        _validateRateBelowOne(_baseCreditLimitRate);
+    /// @dev See {removeCollateral}
+    function _removeCollateral(
+        address _account,
+        uint256 _colAmount
+    ) internal override {
+        Position storage position = positions[_account];
 
-        baseCreditLimitRate = _baseCreditLimitRate;
+        uint256 _debtAmount = _getDebtAmount(_account);
+        uint256 _creditLimit = _getCreditLimit(
+            _account,
+            position.collateral - _colAmount
+        );
 
-        emit NewBaseCreditLimitRate(_baseCreditLimitRate);
+        if (_debtAmount > _creditLimit) revert InsufficientCollateral();
+
+        position.collateral -= _colAmount;
+
+        if (position.collateral == 0) {
+            delete positions[_account];
+            userIndexes.remove(_account);
+        }
+
+        tokenContract.safeTransfer(_account, _colAmount);
+
+        emit CollateralRemoved(_account, _colAmount);
     }
 
-    function setBaseLiquidationLimitRate(
-        RateLib.Rate memory _liquidationLimitRate
-    ) external onlyRole(DEFAULT_ADMIN_ROLE) {
-        _validateRateBelowOne(_liquidationLimitRate);
+    /// @dev See {liquidate}
+    function _liquidate(
+        address _account,
+        address _owner,
+        address _recipient
+    ) internal override {
+        _checkRole(LIQUIDATOR_ROLE, _account);
 
-        baseLiquidationLimitRate = _liquidationLimitRate;
+        Position storage position = positions[_owner];
+        uint256 colAmount = position.collateral;
 
-        emit NewBaseLiquidationLimitRate(_liquidationLimitRate);
+        uint256 debtAmount = _getDebtAmount(_owner);
+        if (debtAmount < _getLiquidationLimit(_owner, position.collateral))
+            revert InvalidPosition(_owner);
+
+        // burn all payment
+        stablecoin.burnFrom(_account, debtAmount);
+
+        // update debt portion
+        totalDebtPortion -= position.debtPortion;
+        totalDebtAmount -= debtAmount;
+        position.debtPortion = 0;
+
+        // transfer collateral to liquidator
+        delete positions[_owner];
+        userIndexes.remove(_owner);
+        tokenContract.safeTransfer(_recipient, colAmount);
+
+        emit Liquidated(_account, _owner, colAmount);
     }
 
-    /// @dev Validates a rate. The denominator must be greater than zero and greater than or equal to the numerator.
-    /// @param _rate The rate to validate
-    function _validateRateBelowOne(RateLib.Rate memory _rate) internal pure {
-        if (!_rate.isValid() || _rate.isAboveOne())
-            revert RateLib.InvalidRate();
+    /// @dev Returns the credit limit
+    /// @param _owner The position owner
+    /// @param _colAmount The collateral amount
+    /// @return The credit limit
+    function _getCreditLimit(
+        address _owner,
+        uint256 _colAmount
+    ) internal view override returns (uint256) {
+        uint256 creditLimitUSD = valueProvider.getCreditLimitUSD(
+            _owner,
+            _colAmount
+        );
+        return creditLimitUSD;
+    }
+
+    /// @dev Returns the minimum amount of debt necessary to liquidate the position
+    /// @param _owner The position owner
+    /// @param _colAmount The collateral amount
+    /// @return The minimum amount of debt to liquidate the position
+    function _getLiquidationLimit(
+        address _owner,
+        uint256 _colAmount
+    ) internal view override returns (uint256) {
+        uint256 liquidationLimitUSD = valueProvider.getLiquidationLimitUSD(
+            _owner,
+            _colAmount
+        );
+        return liquidationLimitUSD;
     }
 }
