@@ -109,7 +109,7 @@ contract ERC721ShezmuAuction is
         IERC721Upgradeable _nft,
         uint256 _idx,
         uint256 _minBid
-    ) external {
+    ) external onlyRole(WHITELISTED_ROLE) {
         uint256 _startTime = _getNextSlotStart();
         _newAuction(
             _owner,
@@ -284,10 +284,9 @@ contract ERC721ShezmuAuction is
 
     /// @notice Allows admins to withdraw an unsold NFT
     /// @param _auctionIndex The auction to withdraw the NFT from.
-    function withdrawUnsoldNFT(
-        uint256 _auctionIndex
-    ) external onlyRole(DEFAULT_ADMIN_ROLE) {
+    function withdrawUnsoldNFT(uint256 _auctionIndex) external {
         Auction storage auction = auctions[_auctionIndex];
+        if (auction.owner != msg.sender) revert Unauthorized();
 
         address _highestBidder = auction.highestBidOwner;
         if (
