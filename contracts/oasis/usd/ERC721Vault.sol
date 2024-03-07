@@ -359,6 +359,7 @@ contract ERC721Vault is AccessControlUpgradeable, ReentrancyGuardUpgradeable {
         uint256 _nftIndex,
         uint256 _repayAmount
     ) external nonReentrant {
+        accrue();
         _repurchase(msg.sender, _nftIndex, _repayAmount);
     }
 

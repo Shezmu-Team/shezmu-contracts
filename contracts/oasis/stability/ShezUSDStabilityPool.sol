@@ -21,7 +21,7 @@ contract ShezUSDStabilityPool is
         uint256 borrowed,
         uint256 repaid
     );
-    event WithdrawToken(
+    event RescueToken(
         address indexed owner,
         address indexed token,
         uint256 amount
@@ -107,7 +107,7 @@ contract ShezUSDStabilityPool is
     }
 
     /// @notice withdraw tokens sent by accident
-    function withdrawToken(address token) external {
+    function rescueToken(address token) external {
         _checkRole(DEFAULT_ADMIN_ROLE, msg.sender);
 
         uint256 amount = IERC20Upgradeable(token).balanceOf(address(this));
@@ -117,6 +117,6 @@ contract ShezUSDStabilityPool is
 
         IERC20Upgradeable(token).safeTransfer(msg.sender, amount);
 
-        emit WithdrawToken(msg.sender, token, amount);
+        emit RescueToken(msg.sender, token, amount);
     }
 }
