@@ -34,6 +34,7 @@ abstract contract AbstractAssetVault is
     error InvalidOracleResults();
     error UnknownAction(uint8 action);
     error InvalidLength();
+    error MinBorrowAmount();
 
     event CollateralAdded(address indexed owner, uint256 colAmount);
     event Borrowed(address indexed owner, uint256 amount);
@@ -58,6 +59,7 @@ abstract contract AbstractAssetVault is
         RateLib.Rate debtInterestApr;
         RateLib.Rate organizationFeeRate;
         uint256 borrowAmountCap;
+        uint256 minBorrowAmount;
     }
 
     bytes32 internal constant DAO_ROLE = keccak256('DAO_ROLE');
@@ -289,6 +291,16 @@ abstract contract AbstractAssetVault is
     ) external onlyRole(SETTER_ROLE) {
         accrue();
 
+        if (
+            !_settings.debtInterestApr.isValid() ||
+            !_settings.debtInterestApr.isBelowOne()
+        ) revert RateLib.InvalidRate();
+
+        if (
+            !_settings.organizationFeeRate.isValid() ||
+            !_settings.organizationFeeRate.isBelowOne()
+        ) revert RateLib.InvalidRate();
+
         settings = _settings;
     }
 
@@ -339,13 +351,15 @@ abstract contract AbstractAssetVault is
 
     /// @dev See {borrow}
     function _borrow(address _account, uint256 _amount) internal {
-        if (_amount == 0) revert InvalidAmount(_amount);
+        if (_amount < settings.minBorrowAmount) {
+            revert MinBorrowAmount();
+        }
 
-        Position storage position = positions[_account];
         uint256 _totalDebtAmount = totalDebtAmount;
         if (_totalDebtAmount + _amount > settings.borrowAmountCap)
             revert DebtCapReached();
 
+        Position storage position = positions[_account];
         uint256 _creditLimit = _getCreditLimit(_account, position.collateral);
         uint256 _debtAmount = _getDebtAmount(_account);
         if (_debtAmount + _amount > _creditLimit) revert InvalidAmount(_amount);
@@ -415,6 +429,13 @@ abstract contract AbstractAssetVault is
         position.debtPortion = _debtPortion - _minusPortion;
         position.debtPrincipal = _debtPrincipal - _paidPrincipal;
         totalDebtAmount = _totalDebtAmount - _amount;
+
+        if (
+            position.debtPrincipal > 0 &&
+            position.debtPrincipal < settings.minBorrowAmount
+        ) {
+            revert MinBorrowAmount();
+        }
 
         emit Repaid(_account, _amount);
     }
