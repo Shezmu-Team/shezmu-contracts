@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0
-pragma solidity ^0.8.4;
+pragma solidity 0.8.17;
 
 import '@openzeppelin/contracts-upgradeable/token/ERC20/IERC20Upgradeable.sol';
 import '@openzeppelin/contracts-upgradeable/token/ERC1155/IERC1155Upgradeable.sol';
@@ -142,18 +142,15 @@ contract ERC1155Liquidator is OwnableUpgradeable, IERC1155ReceiverUpgradeable {
     /// @notice Allows the owner to add information about a NFTVault
     function addNFTVault(
         ERC1155Vault _nftVault,
-        IStabilityPool _stabilityPool,
-        address _nft,
-        uint256 _tokenIndex
+        IStabilityPool _stabilityPool
     ) external onlyOwner {
-        if (address(_nftVault) == address(0) || _nft == address(0))
-            revert ZeroAddress();
+        if (address(_nftVault) == address(0)) revert ZeroAddress();
 
         vaultInfo[_nftVault] = VaultInfo(
             IERC20Upgradeable(_nftVault.stablecoin()),
             _stabilityPool,
-            _nft,
-            _tokenIndex
+            address(_nftVault.tokenContract()),
+            _nftVault.tokenIndex()
         );
     }
 
