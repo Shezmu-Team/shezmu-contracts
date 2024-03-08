@@ -79,7 +79,7 @@ contract ShezUSDStabilityPool is
         address owner,
         uint256 assets,
         uint256 shares
-    ) internal override {
+    ) internal override nonReentrant {
         if (caller != owner) {
             _spendAllowance(owner, caller, shares);
         }
@@ -97,7 +97,7 @@ contract ShezUSDStabilityPool is
         emit Withdraw(caller, receiver, owner, assets, shares);
     }
 
-    function borrowForLiquidation(uint256 amount) external {
+    function borrowForLiquidation(uint256 amount) external nonReentrant {
         _checkRole(LIQUIDATOR_ROLE, msg.sender);
 
         require(
@@ -113,7 +113,10 @@ contract ShezUSDStabilityPool is
         emit BorrowForLiquidation(msg.sender, amount);
     }
 
-    function repayFromLiquidation(uint256 borrowed, uint256 repaid) external {
+    function repayFromLiquidation(
+        uint256 borrowed,
+        uint256 repaid
+    ) external nonReentrant {
         _checkRole(LIQUIDATOR_ROLE, msg.sender);
 
         require(repaid >= borrowed, 'not enough repayment');
@@ -132,7 +135,7 @@ contract ShezUSDStabilityPool is
     }
 
     /// @notice withdraw tokens sent by accident
-    function rescueToken(address token) external {
+    function rescueToken(address token) external nonReentrant {
         _checkRole(DEFAULT_ADMIN_ROLE, msg.sender);
 
         uint256 amount = IERC20Upgradeable(token).balanceOf(address(this));
