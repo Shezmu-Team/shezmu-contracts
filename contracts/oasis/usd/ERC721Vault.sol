@@ -44,6 +44,7 @@ contract ERC721Vault is AccessControlUpgradeable, ReentrancyGuardUpgradeable {
     error InvalidOracleResults();
     error UnknownAction(uint8 action);
     error InvalidLength();
+    error MinBorrowAmount();
 
     event PositionOpened(address indexed owner, uint256 indexed index);
     event Borrowed(
@@ -96,6 +97,7 @@ contract ERC721Vault is AccessControlUpgradeable, ReentrancyGuardUpgradeable {
         RateLib.Rate insuranceLiquidationPenaltyRate;
         uint256 insuranceRepurchaseTimeLimit;
         uint256 borrowAmountCap;
+        uint256 minBorrowAmount;
     }
 
     bytes32 private constant DAO_ROLE = keccak256('DAO_ROLE');
@@ -403,6 +405,26 @@ contract ERC721Vault is AccessControlUpgradeable, ReentrancyGuardUpgradeable {
     ) external onlyRole(SETTER_ROLE) {
         accrue();
 
+        if (
+            !_settings.debtInterestApr.isValid() ||
+            !_settings.debtInterestApr.isBelowOne()
+        ) revert RateLib.InvalidRate();
+
+        if (
+            !_settings.organizationFeeRate.isValid() ||
+            !_settings.organizationFeeRate.isBelowOne()
+        ) revert RateLib.InvalidRate();
+
+        if (
+            !_settings.insurancePurchaseRate.isValid() ||
+            !_settings.insurancePurchaseRate.isBelowOne()
+        ) revert RateLib.InvalidRate();
+
+        if (
+            !_settings.insuranceLiquidationPenaltyRate.isValid() ||
+            !_settings.insuranceLiquidationPenaltyRate.isBelowOne()
+        ) revert RateLib.InvalidRate();
+
         settings = _settings;
     }
 
@@ -483,7 +505,16 @@ contract ERC721Vault is AccessControlUpgradeable, ReentrancyGuardUpgradeable {
         address _owner = positionOwner[_nftIndex];
         if (_owner != _account && _owner != address(0)) revert Unauthorized();
 
-        if (_amount == 0 && _owner != address(0)) revert InvalidAmount(_amount);
+        if (_owner == address(0)) {
+            // allow zero amount if first borrow
+            if (_amount > 0 && _amount < settings.minBorrowAmount) {
+                revert MinBorrowAmount();
+            }
+        } else {
+            if (_amount < settings.minBorrowAmount) {
+                revert MinBorrowAmount();
+            }
+        }
 
         uint256 _totalDebtAmount = totalDebtAmount;
         if (_totalDebtAmount + _amount > settings.borrowAmountCap)
@@ -593,6 +624,13 @@ contract ERC721Vault is AccessControlUpgradeable, ReentrancyGuardUpgradeable {
         position.debtPrincipal = _debtPrincipal - _paidPrincipal;
         totalDebtAmount = _totalDebtAmount - _amount;
 
+        if (
+            position.debtPrincipal > 0 &&
+            position.debtPrincipal < settings.minBorrowAmount
+        ) {
+            revert MinBorrowAmount();
+        }
+
         emit Repaid(_account, _nftIndex, _amount);
     }
 
@@ -680,8 +718,12 @@ contract ERC721Vault is AccessControlUpgradeable, ReentrancyGuardUpgradeable {
         ) revert PositionInsuranceExpired(_nftIndex);
 
         uint256 _debtAmount = position.debtAmountForRepurchase;
-        if (_repayAmount > _debtAmount || _repayAmount == 0)
+        if (_repayAmount == 0) {
             revert InvalidAmount(_repayAmount);
+        }
+        if (_repayAmount > _debtAmount) {
+            _repayAmount = _debtAmount;
+        }
 
         uint256 _newDebtAmount = _debtAmount - _repayAmount;
         uint256 _creditLimit = _getCreditLimit(_account, _nftIndex);
