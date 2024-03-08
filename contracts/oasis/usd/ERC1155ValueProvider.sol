@@ -20,6 +20,8 @@ abstract contract ERC1155ValueProvider is
     error InvalidOracleResults();
 
     event DaoFloorChanged(uint256 newFloor);
+    event NewBaseCreditLimitRate(RateLib.Rate rate);
+    event NewBaseLiquidationLimitRate(RateLib.Rate rate);
 
     /// @notice The NFT floor oracles aggregator
     IChainlinkV3Aggregator public aggregator;
@@ -153,6 +155,8 @@ abstract contract ERC1155ValueProvider is
         _validateRateBelowOne(_baseCreditLimitRate);
 
         baseCreditLimitRate = _baseCreditLimitRate;
+
+        emit NewBaseCreditLimitRate(_baseCreditLimitRate);
     }
 
     function setBaseLiquidationLimitRate(
@@ -161,6 +165,8 @@ abstract contract ERC1155ValueProvider is
         _validateRateBelowOne(_liquidationLimitRate);
 
         baseLiquidationLimitRate = _liquidationLimitRate;
+
+        emit NewBaseLiquidationLimitRate(_liquidationLimitRate);
     }
 
     /// @dev Validates a rate. The denominator must be greater than zero and greater than or equal to the numerator.
