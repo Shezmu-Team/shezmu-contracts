@@ -405,6 +405,26 @@ contract ERC721Vault is AccessControlUpgradeable, ReentrancyGuardUpgradeable {
     ) external onlyRole(SETTER_ROLE) {
         accrue();
 
+        if (
+            !_settings.debtInterestApr.isValid() ||
+            !_settings.debtInterestApr.isBelowOne()
+        ) revert RateLib.InvalidRate();
+
+        if (
+            !_settings.organizationFeeRate.isValid() ||
+            !_settings.organizationFeeRate.isBelowOne()
+        ) revert RateLib.InvalidRate();
+
+        if (
+            !_settings.insurancePurchaseRate.isValid() ||
+            !_settings.insurancePurchaseRate.isBelowOne()
+        ) revert RateLib.InvalidRate();
+
+        if (
+            !_settings.insuranceLiquidationPenaltyRate.isValid() ||
+            !_settings.insuranceLiquidationPenaltyRate.isBelowOne()
+        ) revert RateLib.InvalidRate();
+
         settings = _settings;
     }
 
@@ -698,8 +718,12 @@ contract ERC721Vault is AccessControlUpgradeable, ReentrancyGuardUpgradeable {
         ) revert PositionInsuranceExpired(_nftIndex);
 
         uint256 _debtAmount = position.debtAmountForRepurchase;
-        if (_repayAmount > _debtAmount || _repayAmount == 0)
+        if (_repayAmount == 0) {
             revert InvalidAmount(_repayAmount);
+        }
+        if (_repayAmount > _debtAmount) {
+            _repayAmount = _debtAmount;
+        }
 
         uint256 _newDebtAmount = _debtAmount - _repayAmount;
         uint256 _creditLimit = _getCreditLimit(_account, _nftIndex);
