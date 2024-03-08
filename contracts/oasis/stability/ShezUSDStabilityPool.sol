@@ -3,19 +3,20 @@ pragma solidity 0.8.17;
 
 import '@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol';
 import '@openzeppelin/contracts-upgradeable/security/ReentrancyGuardUpgradeable.sol';
-import '@openzeppelin/contracts-upgradeable/token/ERC20/ERC20Upgradeable.sol';
+import '@openzeppelin/contracts-upgradeable/token/ERC20/extensions/ERC4626Upgradeable.sol';
 import '@openzeppelin/contracts-upgradeable/token/ERC20/utils/SafeERC20Upgradeable.sol';
+import '../../utils/RateLib.sol';
 
 contract ShezUSDStabilityPool is
-    ERC20Upgradeable,
+    ERC4626Upgradeable,
     AccessControlUpgradeable,
     ReentrancyGuardUpgradeable
 {
+    using RateLib for RateLib.Rate;
     using SafeERC20Upgradeable for IERC20Upgradeable;
 
-    event Deposit(address user, uint256 amount, uint256 share);
-    event Withdraw(address user, uint256 amount, uint256 share);
-    event BorrowForLiquidation(address indexed liquidator, uint256 amount);
+    event WithdrawRequest(address indexed user, uint256 assets);
+    event BorrowForLiquidation(address indexed liquidator, uint256 assets);
     event RepayFromLiquidation(
         address indexed liquidator,
         uint256 borrowed,
@@ -24,82 +25,109 @@ contract ShezUSDStabilityPool is
     event RescueToken(
         address indexed owner,
         address indexed token,
-        uint256 amount
+        uint256 assets
     );
 
     bytes32 private constant LIQUIDATOR_ROLE = keccak256('LIQUIDATOR_ROLE');
 
-    IERC20Upgradeable public shezUSD;
-    uint256 public totalAssets;
+    uint256 private _totalAssets;
     uint256 public totalDebt;
     mapping(address => uint256) public debtOf;
 
-    function initialize(address _shezUSD) external initializer {
-        __ERC20_init('ShezmuUSD Stability Pool', 'sShezUSD');
+    RateLib.Rate public maxBorrowRate;
+
+    function initialize(
+        IERC20Upgradeable _shezUSD,
+        RateLib.Rate calldata _maxBorrowRate
+    ) external initializer {
+        __ERC4626_init(_shezUSD);
         __AccessControl_init();
         __ReentrancyGuard_init();
-
-        shezUSD = IERC20Upgradeable(_shezUSD);
+        maxBorrowRate = _maxBorrowRate;
     }
 
-    function amountToShare(uint256 amount) public view returns (uint256 share) {
-        if (totalAssets == 0) return amount;
+    function setMaxBorrowRate(RateLib.Rate calldata _maxBorrowRate) external {
+        _checkRole(DEFAULT_ADMIN_ROLE, msg.sender);
 
-        share = (amount * totalSupply()) / totalAssets;
+        maxBorrowRate = _maxBorrowRate;
     }
 
-    function shareToAmount(uint256 share) public view returns (uint256 amount) {
-        if (totalSupply() == 0) return share;
-
-        amount = (share * totalAssets) / totalSupply();
+    function totalAssets() public view override returns (uint256) {
+        return _totalAssets;
     }
 
-    function deposit(uint256 amount) external nonReentrant {
-        uint256 share = amountToShare(amount);
+    function _deposit(
+        address caller,
+        address receiver,
+        uint256 assets,
+        uint256 shares
+    ) internal override nonReentrant {
+        IERC20Upgradeable(asset()).safeTransferFrom(
+            caller,
+            address(this),
+            assets
+        );
+        _totalAssets += assets;
+        _mint(receiver, shares);
 
-        shezUSD.safeTransferFrom(msg.sender, address(this), amount);
-        totalAssets += amount;
-
-        _mint(msg.sender, share);
-
-        emit Deposit(msg.sender, amount, share);
+        emit Deposit(caller, receiver, assets, shares);
     }
 
-    function withdraw(uint256 share) external nonReentrant {
-        uint256 amount = shareToAmount(share);
+    function _withdraw(
+        address caller,
+        address receiver,
+        address owner,
+        uint256 assets,
+        uint256 shares
+    ) internal override nonReentrant {
+        if (caller != owner) {
+            _spendAllowance(owner, caller, shares);
+        }
+
+        // If _asset is ERC777, `transfer` can trigger a reentrancy AFTER the transfer happens through the
+        // `tokensReceived` hook. On the other hand, the `tokensToSend` hook, that is triggered before the transfer,
+        // calls the vault, which is assumed not malicious.
+        //
+        // Conclusion: we need to do the transfer after the burn so that any reentrancy would happen after the
+        // shares are burned and after the assets are transferred, which is a valid state.
+        _burn(owner, shares);
+        _totalAssets -= assets;
+        IERC20Upgradeable(asset()).safeTransfer(receiver, assets);
+
+        emit Withdraw(caller, receiver, owner, assets, shares);
+    }
+
+    function borrowForLiquidation(uint256 amount) external nonReentrant {
+        _checkRole(LIQUIDATOR_ROLE, msg.sender);
 
         require(
-            shezUSD.balanceOf(address(this)) >= amount,
-            'wait for the liquidation repayment'
+            maxBorrowRate.calculate(_totalAssets) >= totalDebt,
+            'not enough to borrow'
         );
-
-        _burn(msg.sender, share);
-
-        totalAssets -= amount;
-        shezUSD.safeTransfer(msg.sender, amount);
-
-        emit Withdraw(msg.sender, amount, share);
-    }
-
-    function borrowForLiquidation(uint256 amount) external {
-        _checkRole(LIQUIDATOR_ROLE, msg.sender);
 
         debtOf[msg.sender] += amount;
         totalDebt += amount;
 
-        shezUSD.safeTransfer(msg.sender, amount);
+        IERC20Upgradeable(asset()).safeTransfer(msg.sender, amount);
 
         emit BorrowForLiquidation(msg.sender, amount);
     }
 
-    function repayFromLiquidation(uint256 borrowed, uint256 repaid) external {
+    function repayFromLiquidation(
+        uint256 borrowed,
+        uint256 repaid
+    ) external nonReentrant {
         _checkRole(LIQUIDATOR_ROLE, msg.sender);
 
         require(repaid >= borrowed, 'not enough repayment');
 
-        shezUSD.safeTransferFrom(msg.sender, address(this), repaid);
+        IERC20Upgradeable(asset()).safeTransferFrom(
+            msg.sender,
+            address(this),
+            repaid
+        );
 
-        totalAssets += repaid - borrowed;
+        _totalAssets += repaid - borrowed;
         totalDebt -= borrowed;
         debtOf[msg.sender] -= borrowed;
 
@@ -107,12 +135,12 @@ contract ShezUSDStabilityPool is
     }
 
     /// @notice withdraw tokens sent by accident
-    function rescueToken(address token) external {
+    function rescueToken(address token) external nonReentrant {
         _checkRole(DEFAULT_ADMIN_ROLE, msg.sender);
 
         uint256 amount = IERC20Upgradeable(token).balanceOf(address(this));
-        if (token == address(shezUSD)) {
-            amount -= totalAssets;
+        if (token == asset()) {
+            amount -= _totalAssets;
         }
 
         IERC20Upgradeable(token).safeTransfer(msg.sender, amount);
