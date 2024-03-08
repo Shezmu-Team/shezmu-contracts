@@ -54,6 +54,8 @@ contract ERC1155Vault is AbstractAssetVault, IERC1155ReceiverUpgradeable {
         address _account,
         uint256 _colAmount
     ) internal override {
+        if (_colAmount == 0) revert InvalidAmount(_colAmount);
+
         tokenContract.safeTransferFrom(
             _account,
             address(this),
