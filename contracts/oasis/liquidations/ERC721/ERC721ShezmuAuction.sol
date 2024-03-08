@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0
-pragma solidity ^0.8.4;
+pragma solidity 0.8.17;
 
 import '@openzeppelin/contracts-upgradeable/token/ERC20/IERC20Upgradeable.sol';
 import '@openzeppelin/contracts-upgradeable/token/ERC721/IERC721Upgradeable.sol';
@@ -131,7 +131,7 @@ contract ERC721ShezmuAuction is
     function cancelAuction(
         uint256 _auctionIndex,
         address _nftRecipient
-    ) external {
+    ) external nonReentrant {
         if (_nftRecipient == address(0)) revert ZeroAddress();
 
         Auction storage auction = auctions[_auctionIndex];
@@ -248,7 +248,7 @@ contract ERC721ShezmuAuction is
 
     /// @notice Allows admins to withdraw ETH after a successful auction.
     /// @param _auctionIndex The auction to withdraw the ETH from
-    function withdrawETH(uint256 _auctionIndex) external {
+    function withdrawETH(uint256 _auctionIndex) external nonReentrant {
         Auction storage auction = auctions[_auctionIndex];
         if (auction.owner != msg.sender) revert Unauthorized();
 
@@ -261,17 +261,17 @@ contract ERC721ShezmuAuction is
 
         auction.ownerClaimed = true;
 
+        emit ETHClaimed(_auctionIndex);
+
         (bool _sent, ) = payable(msg.sender).call{
             value: auction.bids[_highestBidder]
         }('');
         assert(_sent);
-
-        emit ETHClaimed(_auctionIndex);
     }
 
     /// @notice Allows admins to withdraw an unsold NFT
     /// @param _auctionIndex The auction to withdraw the NFT from.
-    function withdrawUnsoldNFT(uint256 _auctionIndex) external {
+    function withdrawUnsoldNFT(uint256 _auctionIndex) external nonReentrant {
         Auction storage auction = auctions[_auctionIndex];
         if (auction.owner != msg.sender) revert Unauthorized();
 
