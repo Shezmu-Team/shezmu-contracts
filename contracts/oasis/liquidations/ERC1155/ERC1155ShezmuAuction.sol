@@ -101,7 +101,7 @@ contract ERC1155ShezmuAuction is
         uint256 _idx,
         uint256 _amount,
         uint256 _minBid
-    ) external returns (uint256) {
+    ) external onlyRole(WHITELISTED_ROLE) returns(uint256) {
         uint256 _startTime = _getNextSlotStart();
         return
             _newAuction(
