@@ -25,13 +25,9 @@ abstract contract AbstractAssetVault is
 
     error InvalidAmount(uint256 amount);
     error InvalidPosition(address owner);
-    error PositionLiquidated(address owner);
-    error Unauthorized();
     error DebtCapReached();
     error NoDebt();
     error InsufficientCollateral();
-    error ZeroAddress();
-    error InvalidOracleResults();
     error UnknownAction(uint8 action);
     error InvalidLength();
     error MinBorrowAmount();

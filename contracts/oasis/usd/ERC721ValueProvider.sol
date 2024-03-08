@@ -21,6 +21,9 @@ contract ERC721ValueProvider is
     error InvalidOracleResults();
 
     event DaoFloorChanged(uint256 newFloor);
+    event NewBaseCreditLimitRate(RateLib.Rate rate);
+    event NewBaseLiquidationLimitRate(RateLib.Rate rate);
+    event NewNFTTypeMultiplier(bytes32 nftType, RateLib.Rate multiplier);
 
     /// @notice The NFT floor oracles aggregator
     IChainlinkV3Aggregator public aggregator;
@@ -171,6 +174,8 @@ contract ERC721ValueProvider is
         if (!_multiplier.isValid() || _multiplier.isBelowOne())
             revert RateLib.InvalidRate();
         nftTypeValueMultiplier[_type] = _multiplier;
+
+        emit NewNFTTypeMultiplier(_type, _multiplier);
     }
 
     /// @notice Allows the DAO to add an NFT to a specific price category
@@ -194,6 +199,8 @@ contract ERC721ValueProvider is
         _validateRateBelowOne(_baseCreditLimitRate);
 
         baseCreditLimitRate = _baseCreditLimitRate;
+
+        emit NewBaseCreditLimitRate(_baseCreditLimitRate);
     }
 
     function setBaseLiquidationLimitRate(
@@ -202,6 +209,8 @@ contract ERC721ValueProvider is
         _validateRateBelowOne(_liquidationLimitRate);
 
         baseLiquidationLimitRate = _liquidationLimitRate;
+
+        emit NewBaseLiquidationLimitRate(_liquidationLimitRate);
     }
 
     /// @dev Validates a rate. The denominator must be greater than zero and greater than or equal to the numerator.
