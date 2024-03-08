@@ -19,6 +19,9 @@ abstract contract ERC20ValueProvider is
     error ZeroAddress();
     error InvalidOracleResults();
 
+    event NewBaseCreditLimitRate(RateLib.Rate rate);
+    event NewBaseLiquidationLimitRate(RateLib.Rate rate);
+
     /// @notice The token oracles aggregator
     IChainlinkV3Aggregator public aggregator;
 
@@ -110,7 +113,7 @@ abstract contract ERC20ValueProvider is
     }
 
     /// @return The value for the collection, in USD.
-    function getPriceUSD() public virtual view returns (uint256) {
+    function getPriceUSD() public view virtual returns (uint256) {
         (, int256 answer, , uint256 timestamp, ) = aggregator.latestRoundData();
 
         if (answer == 0 || timestamp == 0) revert InvalidOracleResults();
@@ -132,6 +135,8 @@ abstract contract ERC20ValueProvider is
         _validateRateBelowOne(_baseCreditLimitRate);
 
         baseCreditLimitRate = _baseCreditLimitRate;
+
+        emit NewBaseCreditLimitRate(_baseCreditLimitRate);
     }
 
     function setBaseLiquidationLimitRate(
@@ -140,6 +145,8 @@ abstract contract ERC20ValueProvider is
         _validateRateBelowOne(_liquidationLimitRate);
 
         baseLiquidationLimitRate = _liquidationLimitRate;
+
+        emit NewBaseLiquidationLimitRate(_liquidationLimitRate);
     }
 
     /// @dev Validates a rate. The denominator must be greater than zero and greater than or equal to the numerator.
