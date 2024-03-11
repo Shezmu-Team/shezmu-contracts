@@ -6,7 +6,6 @@ import '@openzeppelin/contracts-upgradeable/security/ReentrancyGuardUpgradeable.
 import '@openzeppelin/contracts-upgradeable/utils/structs/EnumerableSetUpgradeable.sol';
 import '@openzeppelin/contracts-upgradeable/token/ERC20/utils/SafeERC20Upgradeable.sol';
 
-import '../../interfaces/IChainlinkV3Aggregator.sol';
 import '../../interfaces/IStableCoin.sol';
 import '../../utils/RateLib.sol';
 import {ERC20ValueProvider} from './ERC20ValueProvider.sol';

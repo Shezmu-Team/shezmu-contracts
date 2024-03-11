@@ -8,7 +8,6 @@ import '@openzeppelin/contracts-upgradeable/token/ERC1155/IERC1155ReceiverUpgrad
 import '@openzeppelin/contracts-upgradeable/utils/structs/EnumerableSetUpgradeable.sol';
 import '@openzeppelin/contracts-upgradeable/token/ERC20/utils/SafeERC20Upgradeable.sol';
 
-import '../../interfaces/IChainlinkV3Aggregator.sol';
 import '../../interfaces/IStableCoin.sol';
 import '../../utils/RateLib.sol';
 import {ERC1155ValueProvider} from './ERC1155ValueProvider.sol';
