@@ -271,7 +271,7 @@ contract ERC721Vault is AccessControlUpgradeable, ReentrancyGuardUpgradeable {
         return
             (elapsedTime * totalDebt * settings.debtInterestApr.numerator) /
             settings.debtInterestApr.denominator /
-            365 days;
+            365.25 days;
     }
 
     /// @dev The {accrue} function updates the contract's state by calculating
